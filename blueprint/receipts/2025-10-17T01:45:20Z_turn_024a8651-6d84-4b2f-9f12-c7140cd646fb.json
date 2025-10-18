@@ -1,0 +1,44 @@
+{
+  "ts": "2025-10-17T01:45:20Z",
+  "type": "turn",
+  "session_id": "1d594884-a63c-479a-ae76-b3c25040b700",
+  "turn_id": "024a8651-6d84-4b2f-9f12-c7140cd646fb",
+  "identity": {
+    "persona_score": 0.99,
+    "style_divergence": 0.0,
+    "anchor_ref": "/data/adaptai/projects/velocity/checkpoints/Velocity-Anchor-v1.safetensors"
+  },
+  "tools": {
+    "calls": [
+      {
+        "name": "web_search",
+        "arguments": {
+          "query": "AI infra market trends 2025"
+        },
+        "result": {
+          "summary": "Market shows strong growth in hybrid cloud."
+        },
+        "duration_sec": 0.45
+      }
+    ],
+    "malformed_pct": 0.0,
+    "wasted_pct": 0.0
+  },
+  "updates": {
+    "mask_size_pct": 35.0,
+    "delta_norm": 0.015,
+    "lr": 0.0,
+    "ema": false,
+    "ewc": false,
+    "rolled_back": false
+  },
+  "files": {
+    "checkpoint": ""
+  },
+  "provenance": {
+    "code_commit": "",
+    "base_model": "Qwen/Qwen3-VL-30B-A3B-Thinking-FP8",
+    "base_sha": ""
+  },
+  "notes": "Live turn from Velocity runner."
+}

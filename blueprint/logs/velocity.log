@@ -1,0 +1,74 @@
+nohup: ignoring input
+2025-10-18 22:29:09,538 - INFO - [Agent] Initializing on device: cuda
+2025-10-18 22:29:09,540 - INFO - [Agent] Loading model: Qwen/Qwen3-VL-30B-A3B-Thinking...
+2025-10-18 22:29:10,052 - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+Loading checkpoint shards:   0%|          | 0/13 [00:00<?, ?it/s]Loading checkpoint shards:   8%|▊         | 1/13 [00:00<00:08,  1.48it/s]Loading checkpoint shards:  15%|█▌        | 2/13 [00:01<00:07,  1.38it/s]Loading checkpoint shards:  23%|██▎       | 3/13 [00:02<00:07,  1.34it/s]Loading checkpoint shards:  31%|███       | 4/13 [00:02<00:06,  1.32it/s]Loading checkpoint shards:  38%|███▊      | 5/13 [00:03<00:06,  1.33it/s]Loading checkpoint shards:  46%|████▌     | 6/13 [00:04<00:05,  1.33it/s]Loading checkpoint shards:  54%|█████▍    | 7/13 [00:05<00:04,  1.32it/s]Loading checkpoint shards:  62%|██████▏   | 8/13 [00:05<00:03,  1.33it/s]Loading checkpoint shards:  69%|██████▉   | 9/13 [00:06<00:03,  1.33it/s]Loading checkpoint shards:  77%|███████▋  | 10/13 [00:07<00:02,  1.34it/s]Loading checkpoint shards:  85%|████████▍ | 11/13 [00:08<00:01,  1.34it/s]Loading checkpoint shards:  92%|█████████▏| 12/13 [00:08<00:00,  1.33it/s]Loading checkpoint shards: 100%|██████████| 13/13 [00:09<00:00,  1.47it/s]Loading checkpoint shards: 100%|██████████| 13/13 [00:09<00:00,  1.37it/s]
+2025-10-18 22:29:20,532 - INFO - Identified 187 plastic parameters.
+2025-10-18 22:29:20,536 - INFO - Identified 187 plastic parameters.
+2025-10-18 22:29:20,539 - INFO - [Agent] Froze 695/882 parameters.
+2025-10-18 22:29:20,540 - INFO - [Agent] Plasticity mask defined.
+2025-10-18 22:29:20,541 - INFO - [Agent] Initialization complete. API server starting.
+2025-10-18 22:29:20,542 - INFO - Added /home/x/Qwen-VL to PYTHONPATH
+2025-10-18 22:29:20,543 - INFO - Starting Uvicorn server on 0.0.0.0:8000
+INFO:     Started server process [97162]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52004 - "POST /probe HTTP/1.1" 200 OK
+2025-10-18 22:29:34,346 - INFO -   [MCC] Deciding learning parameters...
+2025-10-18 22:29:34,347 - INFO -   [MCC] High-confidence prior detected. Increasing learning intensity.
+2025-10-18 22:29:34,348 - INFO -   [Agent Background Thread] Performing 50 recursive refinement steps...
+INFO:     127.0.0.1:52012 - "POST /teach HTTP/1.1" 202 Accepted
+2025-10-18 22:29:34,349 - INFO -   [Agent Background Thread] Starting LR: 5e-05
+2025-10-18 22:29:34,784 - INFO -     -> BG Iteration 1/50 (LR: 5.00e-05)... Loss: 4.4697
+2025-10-18 22:29:35,150 - INFO -     -> BG Iteration 2/50 (LR: 4.91e-05)... Loss: 0.2472
+2025-10-18 22:29:35,514 - INFO -     -> BG Iteration 3/50 (LR: 4.82e-05)... Loss: 0.0037
+2025-10-18 22:29:35,876 - INFO -     -> BG Iteration 4/50 (LR: 4.72e-05)... Loss: 1.2994
+2025-10-18 22:29:36,241 - INFO -     -> BG Iteration 5/50 (LR: 4.63e-05)... Loss: 1.1944
+2025-10-18 22:29:36,605 - INFO -     -> BG Iteration 6/50 (LR: 4.54e-05)... Loss: 1.0464
+2025-10-18 22:29:36,969 - INFO -     -> BG Iteration 7/50 (LR: 4.45e-05)... Loss: 0.9205
+2025-10-18 22:29:37,333 - INFO -     -> BG Iteration 8/50 (LR: 4.36e-05)... Loss: 0.7833
+2025-10-18 22:29:37,697 - INFO -     -> BG Iteration 9/50 (LR: 4.27e-05)... Loss: 0.6268
+2025-10-18 22:29:38,060 - INFO -     -> BG Iteration 10/50 (LR: 4.17e-05)... Loss: 0.4730
+2025-10-18 22:29:38,426 - INFO -     -> BG Iteration 11/50 (LR: 4.08e-05)... Loss: 0.3104
+2025-10-18 22:29:38,788 - INFO -     -> BG Iteration 12/50 (LR: 3.99e-05)... Loss: 0.1576
+2025-10-18 22:29:39,152 - INFO -     -> BG Iteration 13/50 (LR: 3.90e-05)... Loss: 0.0493
+2025-10-18 22:29:39,516 - INFO -     -> BG Iteration 14/50 (LR: 3.81e-05)... Loss: 0.0113
+2025-10-18 22:29:39,880 - INFO -     -> BG Iteration 15/50 (LR: 3.71e-05)... Loss: 0.0030
+2025-10-18 22:29:40,244 - INFO -     -> BG Iteration 16/50 (LR: 3.62e-05)... Loss: 1.5792
+2025-10-18 22:29:40,608 - INFO -     -> BG Iteration 17/50 (LR: 3.53e-05)... Loss: 1.5736
+2025-10-18 22:29:40,970 - INFO -     -> BG Iteration 18/50 (LR: 3.44e-05)... Loss: 1.5660
+2025-10-18 22:29:41,333 - INFO -     -> BG Iteration 19/50 (LR: 3.35e-05)... Loss: 1.5584
+2025-10-18 22:29:41,695 - INFO -     -> BG Iteration 20/50 (LR: 3.26e-05)... Loss: 1.5505
+2025-10-18 22:29:42,058 - INFO -     -> BG Iteration 21/50 (LR: 3.16e-05)... Loss: 1.5432
+2025-10-18 22:29:42,425 - INFO -     -> BG Iteration 22/50 (LR: 3.07e-05)... Loss: 1.5279
+2025-10-18 22:29:42,789 - INFO -     -> BG Iteration 23/50 (LR: 2.98e-05)... Loss: 1.5117
+2025-10-18 22:29:43,157 - INFO -     -> BG Iteration 24/50 (LR: 2.89e-05)... Loss: 1.4959
+2025-10-18 22:29:43,524 - INFO -     -> BG Iteration 25/50 (LR: 2.80e-05)... Loss: 1.4798
+2025-10-18 22:29:43,890 - INFO -     -> BG Iteration 26/50 (LR: 2.70e-05)... Loss: 1.4669
+2025-10-18 22:29:44,256 - INFO -     -> BG Iteration 27/50 (LR: 2.61e-05)... Loss: 1.4537
+2025-10-18 22:29:44,622 - INFO -     -> BG Iteration 28/50 (LR: 2.52e-05)... Loss: 1.4423
+2025-10-18 22:29:44,986 - INFO -     -> BG Iteration 29/50 (LR: 2.43e-05)... Loss: 1.4311
+2025-10-18 22:29:45,350 - INFO -     -> BG Iteration 30/50 (LR: 2.34e-05)... Loss: 1.4228
+2025-10-18 22:29:45,713 - INFO -     -> BG Iteration 31/50 (LR: 2.24e-05)... Loss: 1.4130
+2025-10-18 22:29:46,076 - INFO -     -> BG Iteration 32/50 (LR: 2.15e-05)... Loss: 1.4013
+2025-10-18 22:29:46,442 - INFO -     -> BG Iteration 33/50 (LR: 2.06e-05)... Loss: 1.3931
+2025-10-18 22:29:46,815 - INFO -     -> BG Iteration 34/50 (LR: 1.97e-05)... Loss: 1.3853
+2025-10-18 22:29:47,179 - INFO -     -> BG Iteration 35/50 (LR: 1.88e-05)... Loss: 1.3744
+2025-10-18 22:29:47,544 - INFO -     -> BG Iteration 36/50 (LR: 1.79e-05)... Loss: 1.3663
+2025-10-18 22:29:47,909 - INFO -     -> BG Iteration 37/50 (LR: 1.69e-05)... Loss: 1.3571
+2025-10-18 22:29:48,273 - INFO -     -> BG Iteration 38/50 (LR: 1.60e-05)... Loss: 1.3479
+2025-10-18 22:29:48,639 - INFO -     -> BG Iteration 39/50 (LR: 1.51e-05)... Loss: 1.3409
+2025-10-18 22:29:49,005 - INFO -     -> BG Iteration 40/50 (LR: 1.42e-05)... Loss: 1.3333
+2025-10-18 22:29:49,371 - INFO -     -> BG Iteration 41/50 (LR: 1.33e-05)... Loss: 1.3236
+2025-10-18 22:29:49,737 - INFO -     -> BG Iteration 42/50 (LR: 1.23e-05)... Loss: 1.3146
+2025-10-18 22:29:50,100 - INFO -     -> BG Iteration 43/50 (LR: 1.14e-05)... Loss: 1.3112
+2025-10-18 22:29:50,466 - INFO -     -> BG Iteration 44/50 (LR: 1.05e-05)... Loss: 1.3034
+2025-10-18 22:29:50,830 - INFO -     -> BG Iteration 45/50 (LR: 9.59e-06)... Loss: 1.2999
+2025-10-18 22:29:51,196 - INFO -     -> BG Iteration 46/50 (LR: 8.67e-06)... Loss: 1.2957
+2025-10-18 22:29:51,560 - INFO -     -> BG Iteration 47/50 (LR: 7.76e-06)... Loss: 1.2899
+2025-10-18 22:29:51,926 - INFO -     -> BG Iteration 48/50 (LR: 6.84e-06)... Loss: 1.2868
+2025-10-18 22:29:52,290 - INFO -     -> BG Iteration 49/50 (LR: 5.92e-06)... Loss: 1.2837
+2025-10-18 22:29:52,660 - INFO -     -> BG Iteration 50/50 (LR: 5.00e-06)... Loss: 1.2826
+2025-10-18 22:29:52,662 - INFO -   [Agent Background Thread] Refinement complete.
+INFO:     127.0.0.1:55862 - "POST /probe HTTP/1.1" 200 OK

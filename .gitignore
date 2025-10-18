@@ -1,0 +1,27 @@
+# Large Artifacts & Logs
+checkpoints/*.safetensors
+checkpoints/*.pt
+# data/* # Keep data definition files, ignore large binaries if added later
+logs/*.log
+artifacts/*.pt
+
+# Python Caches & Environment
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Secrets
+config/*key*
+config/*.env
+config/wandb_api_key.txt
+
+# OS & Editor files
+.DS_Store
+*.swp
+
+# Cloned Repos (Code is pulled dynamically or installed)
+Qwen-VL/
