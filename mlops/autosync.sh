@@ -16,7 +16,7 @@ else
     echo "No local changes to commit." >> "$LOG_FILE"
 fi
 
-# Sync using gh cli (pull first, then push)
+# Sync using gh cli (Corrected: No --source needed for default branch sync)
 echo "Attempting sync with remote..." >> "$LOG_FILE"
 gh repo sync "$REPO_SPEC" --branch main >> "$LOG_FILE" 2>&1
 echo "Sync attempt completed." >> "$LOG_FILE"
