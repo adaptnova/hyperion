@@ -1,7 +1,6 @@
 #!/bin/bash
 LOG_FILE="/data/hyperion/logs/autosync.log"
 REPO_DIR="/data/hyperion"
-REPO_SPEC="adaptnova/hyperion" # Explicit repo spec for gh
 
 echo "--- Autosync started at $(date -u +'%Y-%m-%d %H:%M:%S UTC') ---" >> "$LOG_FILE"
 cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR" >> "$LOG_FILE"; exit 1; }
@@ -16,8 +15,8 @@ else
     echo "No local changes to commit." >> "$LOG_FILE"
 fi
 
-# Sync using gh cli (Corrected: No --source needed for default branch sync)
-echo "Attempting sync with remote..." >> "$LOG_FILE"
-gh repo sync "$REPO_SPEC" --branch main >> "$LOG_FILE" 2>&1
-echo "Sync attempt completed." >> "$LOG_FILE"
+# Sync using standard git push (uses gh auth context)
+echo "Attempting push to remote..." >> "$LOG_FILE"
+git push origin main >> "$LOG_FILE" 2>&1
+echo "Push attempt completed." >> "$LOG_FILE"
 echo "--- Autosync finished ---" >> "$LOG_FILE"
