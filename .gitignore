@@ -31,3 +31,4 @@ Qwen-Agent/ # If cloned instead of installed via pip
 # Temporary files from scripts
 /tmp/*_tools.json # From runner script logging
 
+.env
