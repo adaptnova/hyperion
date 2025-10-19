@@ -26,12 +26,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
                     handlers=[logging.FileHandler(os.path.join(LOG_DIR, "velocity.log")), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# --- MCC and Agent Classes (with Checkpointing) ---
+# --- (MCC and Agent classes remain the same) ---
 class MetaCognitiveController:
     def decide_learning_params(self, state_metrics):
         logger.info("  [MCC] Deciding learning parameters...")
         learning_params = {"lr": 1e-6, "recursion_depth": 5} # Cautious default
-        if state_metrics.get("teach_intensity", 0) > 0.5: # Example high intensity trigger
+        if state_metrics.get("teach_intensity", 0) > 0.5:
             logger.info("  [MCC] High teach intensity requested. Increasing learning.")
             learning_params["recursion_depth"] = 50
             learning_params["lr"] = 1e-5 # Tuned reduced peak LR
@@ -45,12 +45,12 @@ class VelocityAgent:
         self.checkpoint_dir = args.checkpoint_dir
         self.checkpoint_interval = args.checkpoint_interval
         self.hf_repo = args.hf_repo
-        self.turn_count = 0 # Tracks learning iterations for checkpointing
+        self.turn_count = 0
 
         # --- W&B Init ---
         try:
             if os.getenv('WANDB_API_KEY'):
-                 wandb.init(project="Project-Velocity", config=args, dir="/data/hyperion/logs")
+                 wandb.init(project="Project-Velocity", config=args, dir="/data/hyperion/logs", reinit=True)
                  logger.info("WandB initialized successfully.")
             else: logger.warning("WANDB_API_KEY not set. Skipping WandB initialization.")
         except Exception as e: logger.error(f"Failed to initialize WandB: {e}", exc_info=False)
@@ -64,10 +64,11 @@ class VelocityAgent:
         self.plastic_params_list = self.get_plastic_params(self.model)
         self.freeze_non_plastic_params(self.model)
         logger.info(f"[Agent] Plasticity mask defined.")
-        self.optimizer = bnb.optim.AdamW8bit(self.plastic_params_list, lr=5e-6) # Base LR
+        self.optimizer = bnb.optim.AdamW8bit(self.plastic_params_list, lr=5e-6)
         logger.info("[Agent] Initialization complete.")
-        self.load_latest_checkpoint() # Attempt to load previous state
+        self.load_latest_checkpoint()
 
+    # ... (get_plastic_params, freeze_non_plastic_params) ...
     def get_plastic_params(self, model):
         config = getattr(model.config, "text_config", model.config)
         total_layers = config.num_hidden_layers
@@ -96,7 +97,8 @@ class VelocityAgent:
         logger.info(f"[Agent] Froze {frozen_count}/{total_count} parameters.")
 
     def generate_response(self, conversation_history: List[Dict[str, str]], max_new_tokens: int = 100) -> str:
-        logger.info(f"[Agent] Generating response based on history (last msg: '{conversation_history[-1]['content'][:50]}...')")
+        # ... (implementation as before) ...
+        logger.info(f"[Agent] Generating response...")
         prompt = ""
         for message in conversation_history: prompt += f"{message['role'].capitalize()}: {message['content']}\n"
         prompt += "Assistant:"
@@ -105,10 +107,11 @@ class VelocityAgent:
         with torch.no_grad():
             outputs = self.model.generate(**inputs, max_new_tokens=max_new_tokens, pad_token_id=self.tokenizer.eos_token_id)
         response = self.tokenizer.decode(outputs[0][input_length:], skip_special_tokens=True).strip()
-        logger.info(f"[Agent] Generated response: '{response[:100]}...'")
+        logger.info(f"[Agent] Generated response.")
         return response
 
     def _perform_teach_in_background(self, text, iterations=1, learning_rate=5e-6):
+        # ... (implementation as before) ...
         logger.info(f"  [Agent Background Thread] Performing {iterations} recursive refinement steps...")
         logger.info(f"  [Agent Background Thread] Starting LR: {learning_rate}")
         initial_lr = learning_rate
@@ -129,12 +132,11 @@ class VelocityAgent:
                 avg_loss += current_loss
                 logger.info(f"    -> BG Iteration {i+1}/{iterations} (LR: {current_lr:.2e})... Loss: {current_loss:.4f}")
                 if wandb.run: wandb.log({"background_loss": current_loss, "background_lr": current_lr, "background_iteration": i+1})
-
             if iterations > 0:
                 if wandb.run: wandb.log({"average_teach_loss": avg_loss / iterations, "teach_iterations": iterations})
                 self.turn_count += iterations
                 if self.checkpoint_interval > 0 and self.turn_count >= self.checkpoint_interval:
-                    self.save_checkpoint()
+                    self.save_checkpoint(force_push=False) # Don't push during normal teach loop, only on trigger
                     self.turn_count = 0
         except Exception as e: logger.error(f"ERROR during refinement: {e}", exc_info=True)
         finally: logger.info(f"  [Agent Background Thread] Refinement complete.")
@@ -143,7 +145,7 @@ class VelocityAgent:
         thread = threading.Thread(target=self._perform_teach_in_background, args=(text, iterations, learning_rate))
         thread.start()
 
-    def save_checkpoint(self):
+    def save_checkpoint(self, force_push=False):
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         ckpt_filename = f"velocity-evolving-{timestamp}.safetensors"
         optim_filename = f"velocity-optimizer-{timestamp}.pt"
@@ -155,20 +157,25 @@ class VelocityAgent:
             save_file(state_dict_to_save, checkpoint_path)
             torch.save(self.optimizer.state_dict(), optimizer_path)
             logger.info("[Agent] Local checkpoint save successful.")
-            if self.hf_repo: self._push_to_hf(checkpoint_path, ckpt_filename, optimizer_path, optim_filename)
+            if self.hf_repo and force_push:
+                # Run the HF push in a background thread so it doesn't block the server
+                push_thread = threading.Thread(target=self._push_to_hf, args=(checkpoint_path, ckpt_filename, optimizer_path, optim_filename))
+                push_thread.start()
         except Exception as e: logger.error(f"[Agent] Checkpoint save failed: {e}", exc_info=True)
+        return checkpoint_path
 
     def _push_to_hf(self, ckpt_path, ckpt_name, optim_path, optim_name):
-        logger.info(f"[Agent] Uploading checkpoint to Hugging Face Hub: {self.hf_repo}...")
+        logger.info(f"[Agent Background Thread] Uploading checkpoint to HF Hub: {self.hf_repo}...")
         try:
             subprocess.run(["huggingface-cli", "upload", self.hf_repo, ckpt_path, ckpt_name], check=True, capture_output=True, text=True)
             subprocess.run(["huggingface-cli", "upload", self.hf_repo, optim_path, optim_name], check=True, capture_output=True, text=True)
-            logger.info("[Agent] Hugging Face upload successful.")
-        except subprocess.CalledProcessError as e: logger.error(f"[Agent] Hugging Face upload failed: {e.stderr}")
-        except FileNotFoundError: logger.error("[Agent] HF upload failed: `huggingface-cli` not found.")
-        except Exception as e: logger.error(f"[Agent] HF upload failed unexpectedly: {e}", exc_info=True)
+            logger.info("[Agent Background Thread] Hugging Face upload successful.")
+        except subprocess.CalledProcessError as e: logger.error(f"[Agent Background Thread] HF upload failed: {e.stderr}")
+        except FileNotFoundError: logger.error("[Agent Background Thread] HF upload failed: `huggingface-cli` not found.")
+        except Exception as e: logger.error(f"[Agent Background Thread] HF upload failed unexpectedly: {e}", exc_info=True)
 
     def load_latest_checkpoint(self):
+        # ... (implementation as before) ...
         logger.info(f"Checking for checkpoints in: {self.checkpoint_dir}")
         try:
             if not os.path.exists(self.checkpoint_dir): return logger.info("Checkpoint dir missing.")
@@ -193,9 +200,11 @@ class VelocityAgent:
             else: logger.info("[Agent] No evolving checkpoints found.")
         except Exception as e: logger.error(f"[Agent] Failed to load checkpoint: {e}.", exc_info=True)
 
-app = FastAPI(title="Velocity Agent API", version="0.3.0")
+# --- FastAPI App and Endpoints ---
+app = FastAPI(title="Velocity Agent API", version="0.3.1") # Bump version
 agent = None
 
+# --- (OpenAI data models remain the same) ---
 class ChatMessage(BaseModel): role: str; content: str
 class ChatCompletionRequest(BaseModel): model: str; messages: List[ChatMessage]; max_tokens: int = 150
 class ChatCompletionChoice(BaseModel): index: int; message: ChatMessage; finish_reason: str
@@ -203,6 +212,7 @@ class ChatCompletionResponse(BaseModel): id: str = Field(default_factory=lambda:
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
+    # ... (implementation as before) ...
     if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
     conversation_history = [{"role": msg.role, "content": msg.content} for msg in request.messages]
     if not conversation_history: raise HTTPException(status_code=400, detail="No messages")
@@ -221,13 +231,30 @@ async def chat_completions(request: ChatCompletionRequest):
 @app.get("/health")
 async def health_check(): return {"status": "ok"}
 
+# --- NEW ENDPOINT for forcing a checkpoint ---
+@app.post("/force_checkpoint")
+async def force_checkpoint():
+    """Manually triggers a checkpoint save and push to HF Hub."""
+    if not agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    
+    logger.info("[API] Force checkpoint requested.")
+    # Run in background to avoid timeout
+    checkpoint_path = agent.save_checkpoint(force_push=True)
+    
+    return JSONResponse(
+        status_code=202,
+        content={"status": "checkpoint_triggered", "local_path": checkpoint_path}
+    )
+
+# --- Main Execution ---
 def main():
     global agent
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-30B-A3B-Thinking")
-    parser.add_argument("--anchor-checkpoint", default="/data/hyperion/checkpoints/Velocity-Anchor-v1.safetensors") # Provide default
+    parser.add_argument("--anchor-checkpoint", default="/data/hyperion/checkpoints/Velocity-Anchor-v1.safetensors")
     parser.add_argument("--checkpoint-dir", default="/data/hyperion/checkpoints")
-    parser.add_argument("--checkpoint-interval", type=int, default=100) # Save every 100 learning iterations
+    parser.add_argument("--checkpoint-interval", type=int, default=100)
     parser.add_argument("--hf-repo", default="LevelUp2x/Hyperion")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
