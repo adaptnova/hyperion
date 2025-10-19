@@ -1,4 +1,8 @@
 import argparse, torch, time, threading, os, sys
+# --- ADDED: Load .env file ---
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env')) # Load .env from /data/hyperion/.env
+# --- END ADD ---
 from transformers import AutoTokenizer, Qwen3VLMoeForConditionalGeneration, AutoConfig
 import bitsandbytes as bnb
 from fastapi import FastAPI, Request
@@ -20,6 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- (MCC and Agent classes remain the same, W&B init will now find the env var) ---
 class MetaCognitiveController:
     def decide_learning_params(self, state_metrics):
         logger.info("  [MCC] Deciding learning parameters...")
@@ -27,9 +32,7 @@ class MetaCognitiveController:
         if state_metrics.get("confidence", 0) > 0.5:
             logger.info("  [MCC] High-confidence prior detected. Increasing learning intensity.")
             learning_params["recursion_depth"] = 50
-            # --- DEFINITIVE FIX: Reduced Peak LR ---
             learning_params["lr"] = 1e-5 # Reduced peak LR
-            # --- END FIX ---
         return learning_params
 
 class VelocityAgent:
@@ -37,16 +40,15 @@ class VelocityAgent:
         self.mcc = MetaCognitiveController()
         self.device = "cuda"
         self.model_id = args.model_id
-        # ... (rest of __init__ including W&B init) ...
+        # --- W&B Initialization (Now reads from loaded .env) ---
         try:
-            # Check if WANDB_API_KEY is set, otherwise run might prompt interactively
             if os.getenv('WANDB_API_KEY'):
                  wandb.init(project="Project-Velocity", config=args, dir="/data/hyperion/logs")
                  logger.info("WandB initialized successfully.")
             else:
-                 logger.warning("WANDB_API_KEY not set. Skipping WandB initialization.")
+                 logger.warning("WANDB_API_KEY not found in environment or .env file. Skipping WandB initialization.")
         except Exception as e:
-            logger.error(f"Failed to initialize WandB: {e}", exc_info=False) # Keep log clean
+            logger.error(f"Failed to initialize WandB: {e}", exc_info=False)
 
         logger.info(f"[Agent] Initializing on device: {self.device}")
         logger.info(f"[Agent] Loading model: {self.model_id}...")
@@ -59,9 +61,9 @@ class VelocityAgent:
         logger.info(f"[Agent] Plasticity mask defined.")
         self.optimizer = bnb.optim.AdamW8bit(plastic_params, lr=5e-6) # Initial LR
         logger.info("[Agent] Initialization complete. API server starting.")
-        # self.load_latest_checkpoint() # Keep commented out for now to ensure clean test
+        # self.load_latest_checkpoint()
 
-    # ... (get_plastic_params, freeze_non_plastic_params, ask remain the same) ...
+    # ... (rest of Agent class methods remain the same) ...
     def get_plastic_params(self, model):
         config = getattr(model.config, "text_config", model.config)
         total_layers = config.num_hidden_layers
@@ -101,9 +103,7 @@ class VelocityAgent:
             outputs = self.model.generate(**inputs, max_new_tokens=50, pad_token_id=self.tokenizer.eos_token_id)
         return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-
     def _perform_teach_in_background(self, text, iterations=1, learning_rate=5e-6):
-        """The actual learning loop with LR scheduling."""
         logger.info(f"  [Agent Background Thread] Performing {iterations} recursive refinement steps...")
         logger.info(f"  [Agent Background Thread] Starting LR: {learning_rate}")
         initial_lr = learning_rate
@@ -137,9 +137,11 @@ class VelocityAgent:
         finally:
             logger.info(f"  [Agent Background Thread] Refinement complete.")
 
+
     def teach(self, text, iterations=1, learning_rate=5e-6):
         thread = threading.Thread(target=self._perform_teach_in_background, args=(text, iterations, learning_rate))
         thread.start()
+
 
 app = FastAPI()
 agent = None
@@ -154,7 +156,6 @@ async def handle_teach(request: Request):
     data = await request.json()
     learning_params = agent.mcc.decide_learning_params(data.get("metrics", {}))
     agent.teach(data.get("text"), iterations=learning_params["recursion_depth"], learning_rate=learning_params["lr"])
-    # Log MCC decision to WandB
     if wandb.run: wandb.log({"mcc_chosen_lr": learning_params["lr"], "mcc_chosen_iterations": learning_params["recursion_depth"]})
     return JSONResponse(status_code=202, content={"status": "processing_in_background", "iterations": learning_params["recursion_depth"], "lr": learning_params["lr"]})
 
