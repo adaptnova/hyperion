@@ -1,10 +1,12 @@
-import argparse, torch, time, threading, os, sys
-# Ensure Qwen-VL is found
-qwen_vl_path = os.path.abspath('./Qwen-VL')
-if qwen_vl_path not in sys.path: sys.path.insert(0, qwen_vl_path)
-
+import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env')) # Load .env
+
+# --- Load Environment & Add Custom Code ---
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+qwen_vl_path = os.path.abspath('./Qwen-VL')
+qwen_agent_path = os.path.abspath('./Qwen-Agent') # Add Qwen-Agent path
+if qwen_vl_path not in sys.path: sys.path.insert(0, qwen_vl_path)
+if qwen_agent_path not in sys.path: sys.path.insert(0, qwen_agent_path)
 
 from transformers import AutoTokenizer, Qwen3VLMoeForConditionalGeneration, AutoConfig
 import bitsandbytes as bnb
@@ -14,10 +16,16 @@ import uvicorn
 import logging
 import uuid
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 import wandb
 from safetensors.torch import save_file, load_file
 import subprocess
+
+# --- Qwen-Agent Tool Imports ---
+from qwen_agent.llm import QwenVLChat
+from qwen_agent.llm.schema import Message, ContentItem, FunctionCall, ToolCall
+from qwen_agent.tools import BaseTool, register_tool
+from qwen_agent.agents import Assistant
 
 # --- Logging Setup ---
 LOG_DIR = "/data/hyperion/logs"
@@ -26,7 +34,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
                     handlers=[logging.FileHandler(os.path.join(LOG_DIR, "velocity.log")), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# --- (MCC and Agent classes remain the same) ---
+# --- Define a Simple Tool ---
+@register_tool('file_system_lister')
+class FileSystemLister(BaseTool):
+    """A tool to list files in the current directory."""
+    description = "Lists all files and directories in the current working directory (/data/hyperion)."
+    parameters = [] # No parameters needed
+
+    def call(self, params: str, **kwargs) -> str:
+        try:
+            logger.info("[Tool Call] Executing file_system_lister...")
+            # Run the 'ls -la' command in the /data/hyperion directory
+            result = subprocess.run(['ls', '-la', '/data/hyperion'], capture_output=True, text=True, check=True)
+            return json.dumps({"status": "success", "listing": result.stdout})
+        except Exception as e:
+            logger.error(f"[Tool Call] Error executing ls: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+# --- MCC and Agent Classes (Upgraded for Tools) ---
 class MetaCognitiveController:
     def decide_learning_params(self, state_metrics):
         logger.info("  [MCC] Deciding learning parameters...")
@@ -61,14 +86,22 @@ class VelocityAgent:
             self.model_id, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
         )
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
+        
+        # --- Setup Qwen-Agent Assistant ---
+        # This wrapper will handle the complexities of tool-call formatting and execution
+        self.qwen_assistant = Assistant(
+            llm=QwenVLChat(llm=self.model, tokenizer=self.tokenizer),
+            function_list=['file_system_lister'] # Register our tool
+        )
+        
         self.plastic_params_list = self.get_plastic_params(self.model)
         self.freeze_non_plastic_params(self.model)
         logger.info(f"[Agent] Plasticity mask defined.")
-        self.optimizer = bnb.optim.AdamW8bit(self.plastic_params_list, lr=5e-6)
+        self.optimizer = bnb.optim.AdamW8bit(self.plastic_params_list, lr=5e-6) # Base LR
         logger.info("[Agent] Initialization complete.")
         self.load_latest_checkpoint()
 
-    # ... (get_plastic_params, freeze_non_plastic_params) ...
+    # ... (get_plastic_params, freeze_non_plastic_params remain the same) ...
     def get_plastic_params(self, model):
         config = getattr(model.config, "text_config", model.config)
         total_layers = config.num_hidden_layers
@@ -89,29 +122,27 @@ class VelocityAgent:
         return params
 
     def freeze_non_plastic_params(self, model):
-        plastic_set = set(self.plastic_params_list)
+        plastic_set = set(self.get_plastic_params(model))
         frozen_count = 0; total_count = 0
         for param in model.parameters():
             total_count += 1
             if param not in plastic_set: param.requires_grad = False; frozen_count += 1
         logger.info(f"[Agent] Froze {frozen_count}/{total_count} parameters.")
 
-    def generate_response(self, conversation_history: List[Dict[str, str]], max_new_tokens: int = 100) -> str:
-        # ... (implementation as before) ...
-        logger.info(f"[Agent] Generating response...")
-        prompt = ""
-        for message in conversation_history: prompt += f"{message['role'].capitalize()}: {message['content']}\n"
-        prompt += "Assistant:"
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        input_length = inputs.input_ids.shape[1]
-        with torch.no_grad():
-            outputs = self.model.generate(**inputs, max_new_tokens=max_new_tokens, pad_token_id=self.tokenizer.eos_token_id)
-        response = self.tokenizer.decode(outputs[0][input_length:], skip_special_tokens=True).strip()
-        logger.info(f"[Agent] Generated response.")
-        return response
+    def generate_response(self, conversation_history: List[Message], max_new_tokens: int = 100) -> List[Message]:
+        """Handles inference using the Qwen-Agent assistant wrapper."""
+        logger.info(f"[Agent] Generating response (Qwen-Agent Assistant)...")
+        
+        # Use the assistant's run method, which handles tool calls automatically
+        response_messages = []
+        for response in self.qwen_assistant.run(messages=conversation_history, max_new_tokens=max_new_tokens):
+            response_messages.extend(response)
+        
+        logger.info(f"[Agent] Generated {len(response_messages)} response messages.")
+        return response_messages
 
+    # ... (Learning and Checkpointing methods remain the same) ...
     def _perform_teach_in_background(self, text, iterations=1, learning_rate=5e-6):
-        # ... (implementation as before) ...
         logger.info(f"  [Agent Background Thread] Performing {iterations} recursive refinement steps...")
         logger.info(f"  [Agent Background Thread] Starting LR: {learning_rate}")
         initial_lr = learning_rate
@@ -132,11 +163,12 @@ class VelocityAgent:
                 avg_loss += current_loss
                 logger.info(f"    -> BG Iteration {i+1}/{iterations} (LR: {current_lr:.2e})... Loss: {current_loss:.4f}")
                 if wandb.run: wandb.log({"background_loss": current_loss, "background_lr": current_lr, "background_iteration": i+1})
+
             if iterations > 0:
                 if wandb.run: wandb.log({"average_teach_loss": avg_loss / iterations, "teach_iterations": iterations})
                 self.turn_count += iterations
                 if self.checkpoint_interval > 0 and self.turn_count >= self.checkpoint_interval:
-                    self.save_checkpoint(force_push=False) # Don't push during normal teach loop, only on trigger
+                    self.save_checkpoint()
                     self.turn_count = 0
         except Exception as e: logger.error(f"ERROR during refinement: {e}", exc_info=True)
         finally: logger.info(f"  [Agent Background Thread] Refinement complete.")
@@ -158,7 +190,6 @@ class VelocityAgent:
             torch.save(self.optimizer.state_dict(), optimizer_path)
             logger.info("[Agent] Local checkpoint save successful.")
             if self.hf_repo and force_push:
-                # Run the HF push in a background thread so it doesn't block the server
                 push_thread = threading.Thread(target=self._push_to_hf, args=(checkpoint_path, ckpt_filename, optimizer_path, optim_filename))
                 push_thread.start()
         except Exception as e: logger.error(f"[Agent] Checkpoint save failed: {e}", exc_info=True)
@@ -175,7 +206,6 @@ class VelocityAgent:
         except Exception as e: logger.error(f"[Agent Background Thread] HF upload failed unexpectedly: {e}", exc_info=True)
 
     def load_latest_checkpoint(self):
-        # ... (implementation as before) ...
         logger.info(f"Checking for checkpoints in: {self.checkpoint_dir}")
         try:
             if not os.path.exists(self.checkpoint_dir): return logger.info("Checkpoint dir missing.")
@@ -201,22 +231,63 @@ class VelocityAgent:
         except Exception as e: logger.error(f"[Agent] Failed to load checkpoint: {e}.", exc_info=True)
 
 # --- FastAPI App and Endpoints ---
-app = FastAPI(title="Velocity Agent API", version="0.3.1") # Bump version
+app = FastAPI(title="Velocity Agent API", version="0.4.0")
 agent = None
 
-# --- (OpenAI data models remain the same) ---
-class ChatMessage(BaseModel): role: str; content: str
-class ChatCompletionRequest(BaseModel): model: str; messages: List[ChatMessage]; max_tokens: int = 150
-class ChatCompletionChoice(BaseModel): index: int; message: ChatMessage; finish_reason: str
-class ChatCompletionResponse(BaseModel): id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}"); object: str = "chat.completion"; created: int = Field(default_factory=lambda: int(time.time())); model: str; choices: List[ChatCompletionChoice]
+# --- OpenAI-Compatible Endpoint Data Models ---
+class OAChatMessage(BaseModel):
+    role: str
+    content: str
 
-@app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(request: ChatCompletionRequest):
-    # ... (implementation as before) ...
+class OAChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[OAChatMessage]
+    max_tokens: int = Field(default=150)
+    # Add tools, temperature, etc. later
+
+class OAChatCompletionChoice(BaseModel):
+    index: int
+    message: OAChatMessage # Will be updated to support tool_calls
+    finish_reason: str
+
+class OAChatCompletionResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}")
+    object: str = Field(default="chat.completion")
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: List[OAChatCompletionChoice]
+
+# --- API Endpoints ---
+@app.post("/v1/chat/completions", response_model=OAChatCompletionResponse)
+async def chat_completions(request: OAChatCompletionRequest):
     if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
-    conversation_history = [{"role": msg.role, "content": msg.content} for msg in request.messages]
-    if not conversation_history: raise HTTPException(status_code=400, detail="No messages")
-    response_text = agent.generate_response(conversation_history, max_new_tokens=request.max_tokens)
+
+    # --- Convert OpenAI messages to Qwen-Agent Message format ---
+    conversation_history: List[Message] = []
+    for msg in request.messages:
+        conversation_history.append(Message(role=msg.role, content=msg.content))
+    
+    if not conversation_history:
+         raise HTTPException(status_code=400, detail="No messages provided")
+
+    # --- Generate Response (using Qwen-Agent wrapper) ---
+    response_messages = agent.generate_response(conversation_history, max_new_tokens=request.max_tokens)
+    
+    # --- Handle Tool Calls and Final Response ---
+    final_text_response = ""
+    finish_reason = "stop"
+    for resp in response_messages:
+        if resp.role == 'assistant' and resp.content:
+            final_text_response = resp.content
+        if resp.role == 'assistant' and resp.tool_calls:
+            # TODO: Add logic to format tool calls into OpenAI standard
+            finish_reason = "tool_calls"
+            final_text_response = "Tool call logic not fully implemented in API response yet."
+            logger.info(f"Agent wants to call tools: {resp.tool_calls}")
+
+    logger.info(f"Final response text: '{final_text_response[:100]}...'")
+
+    # --- Trigger Learning (Heuristic) ---
     last_user_message = next((msg.content for msg in reversed(request.messages) if msg.role == "user"), None)
     if last_user_message:
         teach_intensity = 0.6 if len(last_user_message) < 50 else 0.1 # Simple heuristic
@@ -224,28 +295,21 @@ async def chat_completions(request: ChatCompletionRequest):
         agent.teach(last_user_message, iterations=learning_params["recursion_depth"], learning_rate=learning_params["lr"])
         logger.info(f"Triggered background learning (Intensity: {teach_intensity}).")
         if wandb.run: wandb.log({"mcc_chosen_lr": learning_params["lr"], "mcc_chosen_iterations": learning_params["recursion_depth"]})
-    response_message = ChatMessage(role="assistant", content=response_text)
-    choice = ChatCompletionChoice(index=0, message=response_message, finish_reason="stop")
-    return ChatCompletionResponse(model=agent.model_id, choices=[choice])
+
+    # --- Format Response ---
+    response_message = OAChatMessage(role="assistant", content=final_text_response)
+    choice = OAChatCompletionChoice(index=0, message=response_message, finish_reason=finish_reason)
+    return OAChatCompletionResponse(model=agent.model_id, choices=[choice])
 
 @app.get("/health")
 async def health_check(): return {"status": "ok"}
 
-# --- NEW ENDPOINT for forcing a checkpoint ---
 @app.post("/force_checkpoint")
 async def force_checkpoint():
-    """Manually triggers a checkpoint save and push to HF Hub."""
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
-    
+    if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
     logger.info("[API] Force checkpoint requested.")
-    # Run in background to avoid timeout
     checkpoint_path = agent.save_checkpoint(force_push=True)
-    
-    return JSONResponse(
-        status_code=202,
-        content={"status": "checkpoint_triggered", "local_path": checkpoint_path}
-    )
+    return JSONResponse(status_code=202, content={"status": "checkpoint_triggered", "local_path": checkpoint_path})
 
 # --- Main Execution ---
 def main():
