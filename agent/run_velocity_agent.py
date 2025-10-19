@@ -4,7 +4,7 @@ qwen_vl_path = os.path.abspath('./Qwen-VL')
 if qwen_vl_path not in sys.path: sys.path.insert(0, qwen_vl_path)
 
 from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env')) # Load .env from /data/hyperion/.env
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env')) # Load .env
 
 from transformers import AutoTokenizer, Qwen3VLMoeForConditionalGeneration, AutoConfig
 import bitsandbytes as bnb
@@ -68,8 +68,6 @@ class VelocityAgent:
         logger.info("[Agent] Initialization complete.")
         self.load_latest_checkpoint() # Attempt to load previous state
 
-
-    # ... (get_plastic_params, freeze_non_plastic_params remain the same) ...
     def get_plastic_params(self, model):
         config = getattr(model.config, "text_config", model.config)
         total_layers = config.num_hidden_layers
@@ -97,9 +95,7 @@ class VelocityAgent:
             if param not in plastic_set: param.requires_grad = False; frozen_count += 1
         logger.info(f"[Agent] Froze {frozen_count}/{total_count} parameters.")
 
-
     def generate_response(self, conversation_history: List[Dict[str, str]], max_new_tokens: int = 100) -> str:
-        # ... (implementation as before) ...
         logger.info(f"[Agent] Generating response based on history (last msg: '{conversation_history[-1]['content'][:50]}...')")
         prompt = ""
         for message in conversation_history: prompt += f"{message['role'].capitalize()}: {message['content']}\n"
@@ -112,9 +108,7 @@ class VelocityAgent:
         logger.info(f"[Agent] Generated response: '{response[:100]}...'")
         return response
 
-
     def _perform_teach_in_background(self, text, iterations=1, learning_rate=5e-6):
-        # ... (Learning loop with LR scheduling as before) ...
         logger.info(f"  [Agent Background Thread] Performing {iterations} recursive refinement steps...")
         logger.info(f"  [Agent Background Thread] Starting LR: {learning_rate}")
         initial_lr = learning_rate
@@ -138,20 +132,17 @@ class VelocityAgent:
 
             if iterations > 0:
                 if wandb.run: wandb.log({"average_teach_loss": avg_loss / iterations, "teach_iterations": iterations})
-                # --- Checkpoint Trigger ---
                 self.turn_count += iterations
                 if self.checkpoint_interval > 0 and self.turn_count >= self.checkpoint_interval:
                     self.save_checkpoint()
-                    self.turn_count = 0 # Reset counter
+                    self.turn_count = 0
         except Exception as e: logger.error(f"ERROR during refinement: {e}", exc_info=True)
         finally: logger.info(f"  [Agent Background Thread] Refinement complete.")
-
 
     def teach(self, text, iterations=1, learning_rate=5e-6):
         thread = threading.Thread(target=self._perform_teach_in_background, args=(text, iterations, learning_rate))
         thread.start()
 
-    # --- Checkpointing Methods (Re-integrated) ---
     def save_checkpoint(self):
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         ckpt_filename = f"velocity-evolving-{timestamp}.safetensors"
@@ -176,7 +167,6 @@ class VelocityAgent:
         except subprocess.CalledProcessError as e: logger.error(f"[Agent] Hugging Face upload failed: {e.stderr}")
         except FileNotFoundError: logger.error("[Agent] HF upload failed: `huggingface-cli` not found.")
         except Exception as e: logger.error(f"[Agent] HF upload failed unexpectedly: {e}", exc_info=True)
-
 
     def load_latest_checkpoint(self):
         logger.info(f"Checking for checkpoints in: {self.checkpoint_dir}")
@@ -203,18 +193,14 @@ class VelocityAgent:
             else: logger.info("[Agent] No evolving checkpoints found.")
         except Exception as e: logger.error(f"[Agent] Failed to load checkpoint: {e}.", exc_info=True)
 
-
-# --- FastAPI App and Endpoints ---
 app = FastAPI(title="Velocity Agent API", version="0.3.0")
 agent = None
 
-# --- OpenAI Models --- (Add your data models here)
 class ChatMessage(BaseModel): role: str; content: str
 class ChatCompletionRequest(BaseModel): model: str; messages: List[ChatMessage]; max_tokens: int = 150
 class ChatCompletionChoice(BaseModel): index: int; message: ChatMessage; finish_reason: str
 class ChatCompletionResponse(BaseModel): id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}"); object: str = "chat.completion"; created: int = Field(default_factory=lambda: int(time.time())); model: str; choices: List[ChatCompletionChoice]
 
-# --- API Endpoints ---
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
     if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -235,14 +221,13 @@ async def chat_completions(request: ChatCompletionRequest):
 @app.get("/health")
 async def health_check(): return {"status": "ok"}
 
-# --- Main Execution ---
 def main():
     global agent
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-30B-A3B-Thinking")
-    parser.add_argument("--anchor-checkpoint", required=True)
+    parser.add_argument("--anchor-checkpoint", default="/data/hyperion/checkpoints/Velocity-Anchor-v1.safetensors") # Provide default
     parser.add_argument("--checkpoint-dir", default="/data/hyperion/checkpoints")
-    parser.add_argument("--checkpoint-interval", type=int, default=100)
+    parser.add_argument("--checkpoint-interval", type=int, default=100) # Save every 100 learning iterations
     parser.add_argument("--hf-repo", default="LevelUp2x/Hyperion")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
