@@ -1,11 +1,9 @@
+from __future__ import annotations
 import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
 
 # --- Load Environment & Add Custom Code ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
-# Add Qwen-VL and Qwen-Agent to path if they exist
-qwen_vl_path = os.path.abspath('/data/hyperion/Qwen-VL')
-qwen_agent_path = os.path.abspath('/data/hyperion/Qwen-Agent')
 if os.path.exists(qwen_vl_path) and qwen_vl_path not in sys.path:
     sys.path.insert(0, qwen_vl_path)
 if os.path.exists(qwen_agent_path) and qwen_agent_path not in sys.path:
@@ -23,7 +21,6 @@ from typing import List, Dict, Any, Union, Optional
 import wandb
 from safetensors.torch import save_file, load_file
 
-# --- Qwen-Agent Imports (Corrected per Stack Summary) ---
 from qwen_agent.llm import get_chat_model # Use the factory
 from qwen_agent.llm.schema import Message, ContentItem, FunctionCall
 from qwen_agent.tools.base import BaseTool, register_tool # Correct import path
@@ -83,7 +80,6 @@ class VelocityAgent:
         except Exception as e: logger.error(f"Failed to initialize WandB: {e}", exc_info=False)
 
         logger.info(f"[Agent] Initializing on device: {self.device}")
-        logger.info(f"[Agent] Using Qwen-Agent factory to load model: {self.model_id}...")
         
         # --- Corrected Model Loading (per Stack Summary) ---
         llm_config = {
@@ -95,7 +91,6 @@ class VelocityAgent:
         }
         self.agent_llm = get_chat_model(llm_config)
         
-        # --- Setup Qwen-Agent Assistant ---
         self.qwen_assistant = Assistant(
             llm=self.agent_llm, # Pass the factory-created LLM object
             function_list=['file_system_lister']
@@ -109,7 +104,6 @@ class VelocityAgent:
         # self.load_latest_checkpoint() # Also disabled
 
     def generate_response(self, conversation_history: List[Message], tool_choice: Union[str, Dict] = "auto") -> List[Message]:
-        logger.info(f"[Agent] Generating response (Qwen-Agent Assistant)...")
         response_messages = []
         for response in self.qwen_assistant.run(messages=conversation_history):
             response_messages.extend(response)
@@ -149,7 +143,7 @@ class OAChatMessage(BaseModel):
 class OAChatCompletionRequest(BaseModel):
     model: str
     messages: List[OAChatMessage]
-    tools: Optional[List[OATool]] = None # This line now works
+    tools: Optional[List["OATool"]] = None # This line now works
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
 # *** END FIX ***
@@ -164,7 +158,7 @@ class OAChatCompletionResponse(BaseModel):
     object: str = Field(default="chat.completion")
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[OAChatCompletionResponse]
+    choices: List[OAChatCompletionChoice]
 
 # --- API Endpoints ---
 @app.post("/v1/chat/completions", response_model=OAChatCompletionResponse)
