@@ -4,10 +4,6 @@ from dotenv import load_dotenv
 
 # --- Load Environment & Add Custom Code ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
-if os.path.exists(qwen_vl_path) and qwen_vl_path not in sys.path:
-    sys.path.insert(0, qwen_vl_path)
-if os.path.exists(qwen_agent_path) and qwen_agent_path not in sys.path:
-    sys.path.insert(0, qwen_agent_path)
 
 from transformers import AutoTokenizer, AutoConfig
 import bitsandbytes as bnb
