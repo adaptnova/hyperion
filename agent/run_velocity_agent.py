@@ -1,3 +1,4 @@
+from __future__ import annotations
 from __future__ import annotations # Fix for Pydantic forward-refs
 import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
@@ -68,7 +69,7 @@ class VelocityAgent:
         self.model_id = args.model_id
         self.checkpoint_dir = args.checkpoint_dir
         self.hf_repo = args.hf_repo
-        self.checkpoint_interval = args.checkpoint_interval
+        self.checkpoint_interval = getattr(args, "checkpoint_interval", 50)
         self.turn_count = 0 # For checkpointing
 
         # --- W&B Init ---
@@ -163,7 +164,7 @@ class OAChatMessage(BaseModel):
 class OAChatCompletionRequest(BaseModel):
     model: str
     messages: List[OAChatMessage]
-    tools: Optional[List[OANode]] = None # Uses forward-ref "OATool"
+    tools: Optional[List['OATool']] = None # Uses forward-ref "OATool"
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
     return_tool_calls: bool = False # Add the flag
@@ -179,6 +180,15 @@ class OAChatCompletionResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[OAChatCompletionChoice] # Corrected: references Choice
+
+
+def _strip_think(s: str) -> str:
+    import re
+    if not isinstance(s, str):
+        return s
+    s = re.sub(r"(?is)\s*<think>.*?</think>\s*", "", s)
+    s = re.sub(r"(?is)</?think>", "", s)
+    return s
 
 # --- Tool Call Normalizer ---
 def _normalize_tool_calls(msg) -> Optional[List[OAToolCall]]:
@@ -217,7 +227,8 @@ async def chat_completions(request: OAChatCompletionRequest):
                     qwen_content.append(ContentItem(text=part.text))
                     if msg.role == "user": last_user_message_text = part.text # Grab text part
                 elif part.type == "image_url" and part.image_url:
-                    qwen_content.append(ContentItem(image=part.image_url.get("url"))) # Get URL string
+                    url = part.image_url if isinstance(part.image_url, str) else (part.image_url.get("url") if part.image_url else None)
+                    if url: qwen_content.append(ContentItem(image=url)) # Get URL string
         
         conversation_history.append(Message(
             role=msg.role, 
@@ -227,7 +238,18 @@ async def chat_completions(request: OAChatCompletionRequest):
     
     if not conversation_history: raise HTTPException(status_code=400, detail="No messages provided")
     
-    response_messages = agent.generate_response(conversation_history)
+    try:
+        try:
+        response_messages = agent.generate_response(conversation_history)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error("handler error: %s", tb)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail={"type": e.__class__.__name__, "message": str(e)})
+    except Exception as e:
+        logger.exception("handler error")
+        raise HTTPException(status_code=500, detail=str(e))
     
     final_response_message = None
     if request.return_tool_calls:
@@ -254,6 +276,7 @@ async def chat_completions(request: OAChatCompletionRequest):
             finish_reason = "tool_calls"
             response_content = None
     
+    response_content = _strip_think(response_content)
     response_message_oa = OAChatMessage(role="assistant", content=response_content if response_content else "", tool_calls=response_tool_calls)
     choice = OAChatCompletionChoice(index=0, message=response_message_oa, finish_reason=finish_reason)
     
@@ -284,6 +307,7 @@ def main():
     parser.add_argument("--hf-repo", default="LevelUp2x/Hyperion")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--checkpoint-interval", type=int, default=50)
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
