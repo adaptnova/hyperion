@@ -24,19 +24,22 @@ echo "Syncing HF dataset repository..." >> "$LOG_FILE"
 LOG_ARCHIVE="latest_logs.tar.gz"
 RECEIPTS_ARCHIVE="latest_receipts.tar.gz"
 
-# Archive logs and receipts
-tar -czf "$LOG_ARCHIVE" -C "$REPO_DIR" logs
-tar -czf "$RECEIPTS_ARCHIVE" -C "$REPO_DIR" receipts
+# Archive logs and receipts (Handle empty dirs)
+tar -czf "$LOG_ARCHIVE" -C "$REPO_DIR" logs || echo "Failed to archive logs" >> "$LOG_FILE"
+tar -czf "$RECEIPTS_ARCHIVE" -C "$REPO_DIR" receipts || echo "Failed to archive receipts" >> "$LOG_FILE"
 
 # Upload logs archive
-echo "Uploading logs..." >> "$LOG_FILE"
-huggingface-cli upload "$HF_DATA_REPO_SPEC" "$LOG_ARCHIVE" "$LOG_ARCHIVE" --repo-type=dataset --quiet >> "$LOG_FILE" 2>&1
+if [ -f "$LOG_ARCHIVE" ]; then
+    echo "Uploading logs..." >> "$LOG_FILE"
+    huggingface-cli upload "$HF_DATA_REPO_SPEC" "$LOG_ARCHIVE" "$LOG_ARCHIVE" --repo-type=dataset --quiet >> "$LOG_FILE" 2>&1
+fi
 # Upload receipts archive
-echo "Uploading receipts..." >> "$LOG_FILE"
-huggingface-cli upload "$HF_DATA_REPO_SPEC" "$RECEIPTS_ARCHIVE" "$RECEIPTS_ARCHIVE" --repo-type=dataset --quiet >> "$LOG_FILE" 2>&1
+if [ -f "$RECEIPTS_ARCHIVE" ]; then
+    echo "Uploading receipts..." >> "$LOG_FILE"
+    huggingface-cli upload "$HF_DATA_REPO_SPEC" "$RECEIPTS_ARCHIVE" "$RECEIPTS_ARCHIVE" --repo-type=dataset --quiet >> "$LOG_FILE" 2>&1
+fi
 
 # Clean up local archives
 rm -f "$LOG_ARCHIVE" "$RECEIPTS_ARCHIVE"
-
 echo "HF dataset push attempt completed." >> "$LOG_FILE"
 echo "--- Autosync finished ---" >> "$LOG_FILE"
