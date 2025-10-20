@@ -1,4 +1,3 @@
-from __future__ import annotations
 from __future__ import annotations # Fix for Pydantic forward-refs
 import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
@@ -46,7 +45,7 @@ class FileSystemLister(BaseTool):
         try:
             logger.info(f"[Tool Call] Executing file_system_lister with params: {params}")
             args = json.loads(params)
-            path = args.get('path', '/data/hyperion')
+            path = args.get('path', '/data/hyperion') # Default to hyperion root
             if not os.path.abspath(path).startswith('/data'):
                 raise Exception("Access denied: Path is outside the allowed /data directory.")
             result = subprocess.run(['ls', '-la', path], capture_output=True, text=True, check=True)
@@ -69,7 +68,7 @@ class VelocityAgent:
         self.model_id = args.model_id
         self.checkpoint_dir = args.checkpoint_dir
         self.hf_repo = args.hf_repo
-        self.checkpoint_interval = getattr(args, "checkpoint_interval", 50)
+        self.checkpoint_interval = args.checkpoint_interval
         self.turn_count = 0 # For checkpointing
 
         # --- W&B Init ---
@@ -83,6 +82,7 @@ class VelocityAgent:
         logger.info(f"[Agent] Initializing on device: {self.device}")
         logger.info(f"[Agent] Using Qwen-Agent factory to load model: {self.model_id}...")
         
+        # --- Corrected Model Loading (per Stack Summary) ---
         llm_config = {
             "model_type": "transformers",
             "model": self.model_id,
@@ -92,8 +92,9 @@ class VelocityAgent:
         }
         self.agent_llm = get_chat_model(llm_config)
         
+        # --- Setup Qwen-Agent Assistant ---
         self.qwen_assistant = Assistant(
-            llm=self.agent_llm,
+            llm=self.agent_llm, # Pass the factory-created LLM object
             function_list=['file_system_lister']
         )
         
@@ -128,7 +129,7 @@ class VelocityAgent:
         pass
 
 # --- FastAPI App and Endpoints ---
-app = FastAPI(title="Velocity Agent API", version="0.5.2")
+app = FastAPI(title="Velocity Agent API", version="0.5.3") # Bump version
 agent = None
 
 # --- OpenAI-Compatible Endpoint Data Models (Corrected Order) ---
@@ -167,7 +168,7 @@ class OAChatCompletionRequest(BaseModel):
     tools: Optional[List['OATool']] = None # Uses forward-ref "OATool"
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
-    return_tool_calls: bool = False # Add the flag
+    return_tool_calls: bool = False
 
 class OAChatCompletionChoice(BaseModel):
     index: int
@@ -180,15 +181,6 @@ class OAChatCompletionResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[OAChatCompletionChoice] # Corrected: references Choice
-
-
-def _strip_think(s: str) -> str:
-    import re
-    if not isinstance(s, str):
-        return s
-    s = re.sub(r"(?is)\s*<think>.*?</think>\s*", "", s)
-    s = re.sub(r"(?is)</?think>", "", s)
-    return s
 
 # --- Tool Call Normalizer ---
 def _normalize_tool_calls(msg) -> Optional[List[OAToolCall]]:
@@ -225,10 +217,9 @@ async def chat_completions(request: OAChatCompletionRequest):
             for part in msg.content:
                 if part.type == "text":
                     qwen_content.append(ContentItem(text=part.text))
-                    if msg.role == "user": last_user_message_text = part.text # Grab text part
+                    if msg.role == "user": last_user_message_text = part.text
                 elif part.type == "image_url" and part.image_url:
-                    url = part.image_url if isinstance(part.image_url, str) else (part.image_url.get("url") if part.image_url else None)
-                    if url: qwen_content.append(ContentItem(image=url)) # Get URL string
+                    qwen_content.append(ContentItem(image=part.image_url.get("url")))
         
         conversation_history.append(Message(
             role=msg.role, 
@@ -238,18 +229,7 @@ async def chat_completions(request: OAChatCompletionRequest):
     
     if not conversation_history: raise HTTPException(status_code=400, detail="No messages provided")
     
-    try:
-        try:
-        response_messages = agent.generate_response(conversation_history)
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        logger.error("handler error: %s", tb)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail={"type": e.__class__.__name__, "message": str(e)})
-    except Exception as e:
-        logger.exception("handler error")
-        raise HTTPException(status_code=500, detail=str(e))
+    response_messages = agent.generate_response(conversation_history)
     
     final_response_message = None
     if request.return_tool_calls:
@@ -276,22 +256,16 @@ async def chat_completions(request: OAChatCompletionRequest):
             finish_reason = "tool_calls"
             response_content = None
     
-    response_content = _strip_think(response_content)
     response_message_oa = OAChatMessage(role="assistant", content=response_content if response_content else "", tool_calls=response_tool_calls)
     choice = OAChatCompletionChoice(index=0, message=response_message_oa, finish_reason=finish_reason)
     
-    # --- Learning Loop (DISABLED) ---
     if last_user_message_text:
         logger.info(f"Background learning triggered for '{last_user_message_text[:30]}...' (currently disabled).")
-        # teach_intensity = 0.6 if len(last_user_message_text) < 50 else 0.1
-        # learning_params = agent.mcc.decide_learning_params({"teach_intensity": teach_intensity})
-        # agent.teach(last_user_message_text, iterations=learning_params["recursion_depth"], learning_rate=learning_params["lr"])
-        # if wandb.run: wandb.log({"mcc_chosen_lr": learning_params["lr"], "mcc_chosen_iterations": learning_params["recursion_depth"]})
     
     return OAChatCompletionResponse(model=agent.model_id, choices=[choice])
 
 @app.get("/health")
-async def health_check(): return {"status": "ok"}
+async def health_check(): return {"status":"ok"}
 
 @app.post("/force_checkpoint")
 async def force_checkpoint():
@@ -304,10 +278,10 @@ def main():
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-30B-A3B-Thinking")
     parser.add_argument("--anchor-checkpoint", default="/data/hyperion/checkpoints/Velocity-Anchor-v1.safetensors")
     parser.add_argument("--checkpoint-dir", default="/data/hyperion/checkpoints")
+    parser.add_argument("--checkpoint-interval", type=int, default=100) # Added missing arg
     parser.add_argument("--hf-repo", default="LevelUp2x/Hyperion")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--checkpoint-interval", type=int, default=50)
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
