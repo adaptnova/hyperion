@@ -1,14 +1,9 @@
+from __future__ import annotations
 import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
 
 # --- Load Environment & Add Custom Code ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
-qwen_vl_path = os.path.abspath('/data/hyperion/Qwen-VL')
-qwen_agent_path = os.path.abspath('/data/hyperion/Qwen-Agent')
-if os.path.exists(qwen_vl_path) and qwen_vl_path not in sys.path:
-    sys.path.insert(0, qwen_vl_path)
-if os.path.exists(qwen_agent_path) and qwen_agent_path not in sys.path:
-    sys.path.insert(0, qwen_agent_path)
 
 from transformers import AutoTokenizer, AutoConfig
 import bitsandbytes as bnb
@@ -130,7 +125,14 @@ class OAMessageContent(BaseModel):
 
 class OAToolFunction(BaseModel): name: str = ""; description: str = ""; parameters: Dict[str, Any] = {}
 class OATool(BaseModel): type: str = "function"; function: OAToolFunction
-class OAToolCall(BaseModel): id: str; type: str = "function"; function: FunctionCall
+class OAFunctionCall(BaseModel):
+    name: str
+    arguments: str
+
+class OAToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: OAFunctionCall
 
 class OAChatMessage(BaseModel):
     role: str
@@ -141,7 +143,7 @@ class OAChatMessage(BaseModel):
 class OAChatCompletionRequest(BaseModel):
     model: str
     messages: List[OAChatMessage]
-    tools: Optional[List[OATool]] = None
+    tools: Optional[List['OATool']] = None
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
 
