@@ -5,8 +5,10 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 qwen_vl_path = os.path.abspath('./Qwen-VL')
 qwen_agent_path = os.path.abspath('./Qwen-Agent') # Add Qwen-Agent path
-if qwen_vl_path not in sys.path: sys.path.insert(0, qwen_vl_path)
-if qwen_agent_path not in sys.path: sys.path.insert(0, qwen_agent_path)
+if os.path.exists(qwen_vl_path):
+    if qwen_vl_path not in sys.path: sys.path.insert(0, qwen_vl_path)
+if os.path.exists(qwen_agent_path):
+    if qwen_agent_path not in sys.path: sys.path.insert(0, qwen_agent_path)
 
 from transformers import AutoTokenizer, Qwen3VLMoeForConditionalGeneration, AutoConfig
 import bitsandbytes as bnb
@@ -24,7 +26,7 @@ import subprocess
 # --- Qwen-Agent Tool Imports ---
 from qwen_agent.llm import QwenVLChat
 from qwen_agent.llm.schema import Message, ContentItem, FunctionCall, ToolCall
-from qwen_agent.tools import BaseTool, register_tool
+from qwen_agent.tools.base import BaseTool, register_tool
 from qwen_agent.agents import Assistant
 
 # --- Logging Setup ---
@@ -88,7 +90,6 @@ class VelocityAgent:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
         
         # --- Setup Qwen-Agent Assistant ---
-        # This wrapper will handle the complexities of tool-call formatting and execution
         self.qwen_assistant = Assistant(
             llm=QwenVLChat(llm=self.model, tokenizer=self.tokenizer),
             function_list=['file_system_lister'] # Register our tool
@@ -101,7 +102,6 @@ class VelocityAgent:
         logger.info("[Agent] Initialization complete.")
         self.load_latest_checkpoint()
 
-    # ... (get_plastic_params, freeze_non_plastic_params remain the same) ...
     def get_plastic_params(self, model):
         config = getattr(model.config, "text_config", model.config)
         total_layers = config.num_hidden_layers
@@ -130,18 +130,13 @@ class VelocityAgent:
         logger.info(f"[Agent] Froze {frozen_count}/{total_count} parameters.")
 
     def generate_response(self, conversation_history: List[Message], max_new_tokens: int = 100) -> List[Message]:
-        """Handles inference using the Qwen-Agent assistant wrapper."""
         logger.info(f"[Agent] Generating response (Qwen-Agent Assistant)...")
-        
-        # Use the assistant's run method, which handles tool calls automatically
         response_messages = []
         for response in self.qwen_assistant.run(messages=conversation_history, max_new_tokens=max_new_tokens):
             response_messages.extend(response)
-        
         logger.info(f"[Agent] Generated {len(response_messages)} response messages.")
         return response_messages
 
-    # ... (Learning and Checkpointing methods remain the same) ...
     def _perform_teach_in_background(self, text, iterations=1, learning_rate=5e-6):
         logger.info(f"  [Agent Background Thread] Performing {iterations} recursive refinement steps...")
         logger.info(f"  [Agent Background Thread] Starting LR: {learning_rate}")
@@ -163,13 +158,11 @@ class VelocityAgent:
                 avg_loss += current_loss
                 logger.info(f"    -> BG Iteration {i+1}/{iterations} (LR: {current_lr:.2e})... Loss: {current_loss:.4f}")
                 if wandb.run: wandb.log({"background_loss": current_loss, "background_lr": current_lr, "background_iteration": i+1})
-
             if iterations > 0:
                 if wandb.run: wandb.log({"average_teach_loss": avg_loss / iterations, "teach_iterations": iterations})
                 self.turn_count += iterations
                 if self.checkpoint_interval > 0 and self.turn_count >= self.checkpoint_interval:
-                    self.save_checkpoint()
-                    self.turn_count = 0
+                    self.save_checkpoint(); self.turn_count = 0
         except Exception as e: logger.error(f"ERROR during refinement: {e}", exc_info=True)
         finally: logger.info(f"  [Agent Background Thread] Refinement complete.")
 
@@ -235,70 +228,50 @@ app = FastAPI(title="Velocity Agent API", version="0.4.0")
 agent = None
 
 # --- OpenAI-Compatible Endpoint Data Models ---
-class OAChatMessage(BaseModel):
-    role: str
-    content: str
-
-class OAChatCompletionRequest(BaseModel):
-    model: str
-    messages: List[OAChatMessage]
-    max_tokens: int = Field(default=150)
-    # Add tools, temperature, etc. later
-
-class OAChatCompletionChoice(BaseModel):
-    index: int
-    message: OAChatMessage # Will be updated to support tool_calls
-    finish_reason: str
-
-class OAChatCompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}")
-    object: str = Field(default="chat.completion")
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str
-    choices: List[OAChatCompletionChoice]
+class OAToolFunction(BaseModel): name: str = ""; description: str = ""; parameters: Dict[str, Any] = {}
+class OATool(BaseModel): type: str = "function"; function: OAToolFunction
+class OAMessageContent(BaseModel): type: str; text: Optional[str] = None
+class OAToolCall(BaseModel): id: str; type: str = "function"; function: FunctionCall
+class OAChatMessage(BaseModel): role: str; content: Union[str, List[OAMessageContent]]; tool_calls: Optional[List[OAToolCall]] = None; tool_call_id: Optional[str] = None
+class OAChatCompletionRequest(BaseModel): model: str; messages: List[OAChatMessage]; tools: Optional[List[OATool]] = None; tool_choice: Optional[str] = "auto"; max_tokens: int = Field(default=150)
+class OAChatCompletionChoice(BaseModel): index: int; message: OAChatMessage; finish_reason: str
+class OAChatCompletionResponse(BaseModel): id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}"); object: str = Field(default="chat.completion"); created: int = Field(default_factory=lambda: int(time.time())); model: str; choices: List[OAChatCompletionChoice]
 
 # --- API Endpoints ---
 @app.post("/v1/chat/completions", response_model=OAChatCompletionResponse)
 async def chat_completions(request: OAChatCompletionRequest):
     if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
-
-    # --- Convert OpenAI messages to Qwen-Agent Message format ---
     conversation_history: List[Message] = []
     for msg in request.messages:
-        conversation_history.append(Message(role=msg.role, content=msg.content))
+        if isinstance(msg.content, str):
+            conversation_history.append(Message(role=msg.role, content=msg.content))
+        elif msg.role == 'tool':
+            conversation_history.append(Message(role='tool', content=msg.content, tool_call_id=msg.tool_call_id))
     
-    if not conversation_history:
-         raise HTTPException(status_code=400, detail="No messages provided")
-
-    # --- Generate Response (using Qwen-Agent wrapper) ---
-    response_messages = agent.generate_response(conversation_history, max_new_tokens=request.max_tokens)
+    if not conversation_history: raise HTTPException(status_code=400, detail="No messages provided")
     
-    # --- Handle Tool Calls and Final Response ---
-    final_text_response = ""
-    finish_reason = "stop"
-    for resp in response_messages:
-        if resp.role == 'assistant' and resp.content:
-            final_text_response = resp.content
-        if resp.role == 'assistant' and resp.tool_calls:
-            # TODO: Add logic to format tool calls into OpenAI standard
-            finish_reason = "tool_calls"
-            final_text_response = "Tool call logic not fully implemented in API response yet."
-            logger.info(f"Agent wants to call tools: {resp.tool_calls}")
-
-    logger.info(f"Final response text: '{final_text_response[:100]}...'")
-
-    # --- Trigger Learning (Heuristic) ---
-    last_user_message = next((msg.content for msg in reversed(request.messages) if msg.role == "user"), None)
+    response_messages = agent.generate_response(conversation_history)
+    
+    final_response_message = response_messages[-1]
+    response_content = ""; response_tool_calls = None; finish_reason = "stop"
+    
+    if final_response_message.role == 'assistant':
+        if isinstance(final_response_message.content, str): response_content = final_response_message.content
+        if final_response_message.tool_calls:
+            response_tool_calls = [OAToolCall(id=tc.id, function=tc.function) for tc in final_response_message.tool_calls]
+            finish_reason = "tool_calls"; response_content = None
+    
+    response_message_oa = OAChatMessage(role="assistant", content=response_content if response_content else "", tool_calls=response_tool_calls)
+    choice = OAChatCompletionChoice(index=0, message=response_message_oa, finish_reason=finish_reason)
+    
+    last_user_message = next((msg.content for msg in reversed(request.messages) if msg.role == "user" and isinstance(msg.content, str)), None)
     if last_user_message:
-        teach_intensity = 0.6 if len(last_user_message) < 50 else 0.1 # Simple heuristic
+        teach_intensity = 0.6 if len(last_user_message) < 50 else 0.1
         learning_params = agent.mcc.decide_learning_params({"teach_intensity": teach_intensity})
         agent.teach(last_user_message, iterations=learning_params["recursion_depth"], learning_rate=learning_params["lr"])
         logger.info(f"Triggered background learning (Intensity: {teach_intensity}).")
         if wandb.run: wandb.log({"mcc_chosen_lr": learning_params["lr"], "mcc_chosen_iterations": learning_params["recursion_depth"]})
 
-    # --- Format Response ---
-    response_message = OAChatMessage(role="assistant", content=final_text_response)
-    choice = OAChatCompletionChoice(index=0, message=response_message, finish_reason=finish_reason)
     return OAChatCompletionResponse(model=agent.model_id, choices=[choice])
 
 @app.get("/health")
@@ -326,7 +299,6 @@ def main():
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     agent = VelocityAgent(args)
-
     logger.info(f"Starting Uvicorn server on {args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", reload=False)
 
