@@ -110,6 +110,33 @@ class VelocityAgent:
 app = FastAPI(title="Velocity Agent API", version="0.5.1") # Bump version
 agent = None
 
+def _normalize_tool_calls(msg):
+    import uuid
+    calls = []
+    tc_list = getattr(msg, "tool_calls", None)
+    if tc_list:
+        for tc in tc_list:
+            fn = getattr(tc, "function", None)
+            if isinstance(fn, dict):
+                name = fn.get("name", "")
+                arguments = fn.get("arguments", "")
+            else:
+                name = getattr(fn, "name", "")
+                arguments = getattr(fn, "arguments", "")
+            calls.append(OAToolCall(id=getattr(tc, "id", str(uuid.uuid4())), function=OAFunctionCall(name=name, arguments=arguments)))
+    else:
+        fc = getattr(msg, "function_call", None)
+        if fc is not None:
+            if isinstance(fc, dict):
+                name = fc.get("name", "")
+                arguments = fc.get("arguments", "")
+            else:
+                name = getattr(fc, "name", "")
+                arguments = getattr(fc, "arguments", "")
+            calls.append(OAToolCall(id=str(uuid.uuid4()), function=OAFunctionCall(name=name, arguments=arguments)))
+    return calls
+
+
 # --- OpenAI-Compatible Endpoint Data Models ---
 # *** DEFINITIVE FIX: Re-ordered to define OATool *before* it is used ***
 class OAMessageContent(BaseModel):
@@ -125,10 +152,14 @@ class OATool(BaseModel):
     type: str = "function"
     function: OAToolFunction
 
+class OAFunctionCall(BaseModel):
+    name: str
+    arguments: str
+
 class OAToolCall(BaseModel):
     id: str
     type: str = "function"
-    function: FunctionCall
+    function: OAFunctionCall
 
 class OAChatMessage(BaseModel):
     role: str
@@ -176,9 +207,11 @@ async def chat_completions(request: OAChatCompletionRequest):
     
     if final_response_message.role == 'assistant':
         if isinstance(final_response_message.content, str): response_content = final_response_message.content
-        if final_response_message.tool_calls:
-            response_tool_calls = [OAToolCall(id=tc.id, function=tc.function) for tc in final_response_message.tool_calls]
-            finish_reason = "tool_calls"; response_content = None
+        tool_calls = _normalize_tool_calls(final_response_message)
+    if tool_calls:
+        response_tool_calls = tool_calls
+        finish_reason = "tool_calls"
+        response_content = None
     
     response_message_oa = OAChatMessage(role="assistant", content=response_content if response_content else "", tool_calls=response_tool_calls)
     choice = OAChatCompletionChoice(index=0, message=response_message_oa, finish_reason=finish_reason)
