@@ -1,9 +1,14 @@
-from __future__ import annotations
 import argparse, torch, time, threading, os, sys, json, subprocess
 from dotenv import load_dotenv
 
 # --- Load Environment & Add Custom Code ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+qwen_vl_path = os.path.abspath('/data/hyperion/Qwen-VL')
+qwen_agent_path = os.path.abspath('/data/hyperion/Qwen-Agent')
+if os.path.exists(qwen_vl_path) and qwen_vl_path not in sys.path:
+    sys.path.insert(0, qwen_vl_path)
+if os.path.exists(qwen_agent_path) and qwen_agent_path not in sys.path:
+    sys.path.insert(0, qwen_agent_path)
 
 from transformers import AutoTokenizer, AutoConfig
 import bitsandbytes as bnb
@@ -17,6 +22,7 @@ from typing import List, Dict, Any, Union, Optional
 import wandb
 from safetensors.torch import save_file, load_file
 
+# --- Qwen-Agent Imports (Corrected per Stack Summary) ---
 from qwen_agent.llm import get_chat_model # Use the factory
 from qwen_agent.llm.schema import Message, ContentItem, FunctionCall
 from qwen_agent.tools.base import BaseTool, register_tool # Correct import path
@@ -76,8 +82,8 @@ class VelocityAgent:
         except Exception as e: logger.error(f"Failed to initialize WandB: {e}", exc_info=False)
 
         logger.info(f"[Agent] Initializing on device: {self.device}")
+        logger.info(f"[Agent] Using Qwen-Agent factory to load model: {self.model_id}...")
         
-        # --- Corrected Model Loading (per Stack Summary) ---
         llm_config = {
             "model_type": "transformers",
             "model": self.model_id,
@@ -88,18 +94,21 @@ class VelocityAgent:
         self.agent_llm = get_chat_model(llm_config)
         
         self.qwen_assistant = Assistant(
-            llm=self.agent_llm, # Pass the factory-created LLM object
+            llm=self.agent_llm,
             function_list=['file_system_lister']
         )
         
         # --- Custom Learning Loop (DISABLED) ---
+        self.model = self.agent_llm.model # Get ref to model for learning
+        self.tokenizer = self.agent_llm.tokenizer # Get ref to tokenizer
         self.plastic_params_list = []
         self.optimizer = None
         logger.info("[Agent] Custom learning loop is DISABLED pending refactor.")
         logger.info("[Agent] Initialization complete.")
         # self.load_latest_checkpoint() # Also disabled
 
-    def generate_response(self, conversation_history: List[Message], tool_choice: Union[str, Dict] = "auto") -> List[Message]:
+    def generate_response(self, conversation_history: List[Message]) -> List[Message]:
+        logger.info(f"[Agent] Generating response (Qwen-Agent Assistant)...")
         response_messages = []
         for response in self.qwen_assistant.run(messages=conversation_history):
             response_messages.extend(response)
@@ -107,73 +116,34 @@ class VelocityAgent:
         return response_messages
 
 # --- FastAPI App and Endpoints ---
-app = FastAPI(title="Velocity Agent API", version="0.5.1") # Bump version
+app = FastAPI(title="Velocity Agent API", version="0.5.2") # Bump version
 agent = None
 
-def _normalize_tool_calls(msg):
-    import uuid
-    calls = []
-    tc_list = getattr(msg, "tool_calls", None)
-    if tc_list:
-        for tc in tc_list:
-            fn = getattr(tc, "function", None)
-            if isinstance(fn, dict):
-                name = fn.get("name", "")
-                arguments = fn.get("arguments", "")
-            else:
-                name = getattr(fn, "name", "")
-                arguments = getattr(fn, "arguments", "")
-            calls.append(OAToolCall(id=getattr(tc, "id", str(uuid.uuid4())), function=OAFunctionCall(name=name, arguments=arguments)))
-    else:
-        fc = getattr(msg, "function_call", None)
-        if fc is not None:
-            if isinstance(fc, dict):
-                name = fc.get("name", "")
-                arguments = fc.get("arguments", "")
-            else:
-                name = getattr(fc, "name", "")
-                arguments = getattr(fc, "arguments", "")
-            calls.append(OAToolCall(id=str(uuid.uuid4()), function=OAFunctionCall(name=name, arguments=arguments)))
-    return calls
+# --- OpenAI-Compatible Endpoint Data Models (Upgraded for VL) ---
+class OAImageUrl(BaseModel):
+    url: str
 
-
-# --- OpenAI-Compatible Endpoint Data Models ---
-# *** DEFINITIVE FIX: Re-ordered to define OATool *before* it is used ***
 class OAMessageContent(BaseModel):
     type: str
     text: Optional[str] = None
+    image_url: Optional[OAImageUrl] = None
 
-class OAToolFunction(BaseModel):
-    name: str = ""
-    description: str = ""
-    parameters: Dict[str, Any] = {}
-
-class OATool(BaseModel):
-    type: str = "function"
-    function: OAToolFunction
-
-class OAFunctionCall(BaseModel):
-    name: str
-    arguments: str
-
-class OAToolCall(BaseModel):
-    id: str
-    type: str = "function"
-    function: OAFunctionCall
+class OAToolFunction(BaseModel): name: str = ""; description: str = ""; parameters: Dict[str, Any] = {}
+class OATool(BaseModel): type: str = "function"; function: OAToolFunction
+class OAToolCall(BaseModel): id: str; type: str = "function"; function: FunctionCall
 
 class OAChatMessage(BaseModel):
     role: str
-    content: Union[str, List[OAMessageContent]]
+    content: Union[str, List[OAMessageContent]] # Now accepts string OR list of content parts
     tool_calls: Optional[List[OAToolCall]] = None
     tool_call_id: Optional[str] = None
 
 class OAChatCompletionRequest(BaseModel):
     model: str
     messages: List[OAChatMessage]
-    tools: Optional[List["OATool"]] = None # This line now works
+    tools: Optional[List[OATool]] = None
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
-# *** END FIX ***
 
 class OAChatCompletionChoice(BaseModel):
     index: int
@@ -181,22 +151,33 @@ class OAChatCompletionChoice(BaseModel):
     finish_reason: str
 
 class OAChatCompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}")
-    object: str = Field(default="chat.completion")
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str
-    choices: List[OAChatCompletionChoice]
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}"); object: str = Field(default="chat.completion");
+    created: int = Field(default_factory=lambda: int(time.time())); model: str; choices: List[OAChatCompletionChoice]
 
 # --- API Endpoints ---
 @app.post("/v1/chat/completions", response_model=OAChatCompletionResponse)
 async def chat_completions(request: OAChatCompletionRequest):
     if not agent: raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    # --- Convert OpenAI messages to Qwen-Agent Message format (VL Enabled) ---
     conversation_history: List[Message] = []
     for msg in request.messages:
+        qwen_content: List[ContentItem] = []
         if isinstance(msg.content, str):
-            conversation_history.append(Message(role=msg.role, content=msg.content))
-        elif msg.role == 'tool':
-            conversation_history.append(Message(role='tool', content=msg.content, tool_call_id=msg.tool_call_id))
+            qwen_content.append(ContentItem(text=msg.content))
+        elif isinstance(msg.content, list):
+            for part in msg.content:
+                if part.type == "text":
+                    qwen_content.append(ContentItem(text=part.text))
+                elif part.type == "image_url":
+                    # Qwen-Agent expects a URL or local path string for images
+                    qwen_content.append(ContentItem(image=part.image_url.url))
+        
+        conversation_history.append(Message(
+            role=msg.role, 
+            content=qwen_content,
+            tool_call_id=msg.tool_call_id
+        ))
     
     if not conversation_history: raise HTTPException(status_code=400, detail="No messages provided")
     
@@ -206,12 +187,18 @@ async def chat_completions(request: OAChatCompletionRequest):
     response_content = ""; response_tool_calls = None; finish_reason = "stop"
     
     if final_response_message.role == 'assistant':
-        if isinstance(final_response_message.content, str): response_content = final_response_message.content
-        tool_calls = _normalize_tool_calls(final_response_message)
-    if tool_calls:
-        response_tool_calls = tool_calls
-        finish_reason = "tool_calls"
-        response_content = None
+        # Re-parse content from Qwen-Agent's list format to a simple string for OpenAI
+        if isinstance(final_response_message.content, list):
+            for item in final_response_message.content:
+                if item.text:
+                    response_content += item.text + " "
+            response_content = response_content.strip()
+        elif isinstance(final_response_message.content, str):
+            response_content = final_response_message.content
+
+        if final_response_message.tool_calls:
+            response_tool_calls = [OAToolCall(id=tc.id, function=tc.function) for tc in final_response_message.tool_calls]
+            finish_reason = "tool_calls"; response_content = None
     
     response_message_oa = OAChatMessage(role="assistant", content=response_content if response_content else "", tool_calls=response_tool_calls)
     choice = OAChatCompletionChoice(index=0, message=response_message_oa, finish_reason=finish_reason)
@@ -223,10 +210,8 @@ async def chat_completions(request: OAChatCompletionRequest):
 
 @app.get("/health")
 async def health_check(): return {"status": "ok"}
-
 @app.post("/force_checkpoint")
-async def force_checkpoint():
-    return JSONResponse(status_code=400, content={"status": "error", "message": "Custom checkpointing disabled."})
+async def force_checkpoint(): return JSONResponse(status_code=400, content={"status": "error", "message": "Custom checkpointing disabled."})
 
 # --- Main Execution ---
 def main():
