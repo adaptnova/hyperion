@@ -117,13 +117,23 @@ class VelocityAgent:
         return response_messages
 
 # --- FastAPI App and Endpoints ---
-app = FastAPI(title="Velocity Agent API", version="0.5.0") # Bump version
+app = FastAPI(title="Velocity Agent API", version="0.5.1") # Bump version
 agent = None
 
 # --- OpenAI-Compatible Endpoint Data Models ---
+# *** DEFINITIVE FIX: Re-ordered to define OATool *before* it is used ***
 class OAMessageContent(BaseModel):
     type: str
     text: Optional[str] = None
+
+class OAToolFunction(BaseModel):
+    name: str = ""
+    description: str = ""
+    parameters: Dict[str, Any] = {}
+
+class OATool(BaseModel):
+    type: str = "function"
+    function: OAToolFunction
 
 class OAToolCall(BaseModel):
     id: str
@@ -139,9 +149,10 @@ class OAChatMessage(BaseModel):
 class OAChatCompletionRequest(BaseModel):
     model: str
     messages: List[OAChatMessage]
-    tools: Optional[List[OATool]] = None
+    tools: Optional[List[OATool]] = None # This line now works
     tool_choice: Optional[str] = "auto"
     max_tokens: int = Field(default=150)
+# *** END FIX ***
 
 class OAChatCompletionChoice(BaseModel):
     index: int
@@ -153,7 +164,7 @@ class OAChatCompletionResponse(BaseModel):
     object: str = Field(default="chat.completion")
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[OAChatCompletionChoice]
+    choices: List[OAChatCompletionResponse]
 
 # --- API Endpoints ---
 @app.post("/v1/chat/completions", response_model=OAChatCompletionResponse)
